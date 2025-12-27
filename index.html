@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Pixtap - Pixel Battle</title>
+    <style>
+        /* Стили оформления */
+        body { margin: 0; overflow: hidden; background: #1a1a1a; font-family: sans-serif; }
+        
+        #controls { 
+            position: fixed; top: 10px; left: 10px; 
+            background: rgba(0,0,0,0.85); padding: 15px; 
+            border-radius: 8px; color: white; z-index: 10; 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+
+        canvas { display: block; image-rendering: pixelated; cursor: crosshair; }
+
+        #cooldown-bar {
+            margin-top: 10px;
+            width: 150px;
+            height: 8px;
+            background: #444;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        #cooldown-fill {
+            width: 0%;
+            height: 100%;
+            background: #00ff00;
+            transition: width 0.3s ease;
+        }
+
+        .limit-reached { background: #ff4444 !important; }
+        
+        #timer-text { font-size: 12px; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+<div id="controls">
+    <strong>Pixtap</strong><br>
+    <div style="margin-top:10px;">
+        Цвет: <input type="color" id="colorPicker" value="#ff0000">
+    </div>
+    
+    <div id="cooldown-bar">
+        <div id="cooldown-fill"></div>
+    </div>
+    <div id="timer-text">Заряд: 0 / 180 сек.</div>
+
+    <p style="font-size: 10px; color: #aaa; margin-top: 10px;">
+        ЛКМ: Рисовать<br>
+        ПКМ: Двигать холст<br>
+        Колесо: Зум
+    </p>
+</div>
+
+<canvas id="canvas"></canvas>
+
+<script src="/socket.io/socket.io.js"></script>
+
+<script>
+    const socket = io();
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const colorPicker = document.getElementById('colorPicker');
+    
+    // Переменные для холста
+    const PIXEL_SIZE = 20;
+    let scale = 1;
+    let offsetX = window.innerWidth / 2;
+    let offsetY = window.innerHeight / 2;
+    let pixels = {}; 
+    let currentCooldown = 0;
+    const MAX_COOLDOWN = 180;
+
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        draw();
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.save();
+        ctx.translate(offsetX, offsetY);
+        ctx.scale(scale, scale);
+
+        // Рисуем все пиксели из памяти
+        for (let key in pixels) {
+            const [x, y] = key.split(',').map(Number);
+            ctx.fillStyle = pixels[key];
+            ctx.fillRect(x * PIXEL_SIZE, y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
+        }
+
+        ctx.restore();
+    }
+
+    // События Socket.io
+    socket.on('init_board', (data) => { pixels = data; draw(); });
+    
+    socket.on('update_pixel', (data) => {
+        pixels[`${data.x},${data.y}`] = data.color;
+        draw();
+    });
+
+    socket.on('cooldown_update', (data) => {
+        currentCooldown = data.current;
+        updateUI();
+    });
+
+    // Отрисовка клика
+    canvas.addEventListener('mousedown', (e) => {
+        if (e.button === 0) { // Левая кнопка
+            const worldX = Math.floor(((e.clientX - offsetX) / scale) / PIXEL_SIZE);
+            const worldY = Math.floor(((e.clientY - offsetY) / scale) / PIXEL_SIZE);
+            socket.emit('place_pixel', { x: worldX, y: worldY, color: colorPicker.value });
+        }
+    });
+
+    // Зум
+    window.addEventListener('wheel', (e) => {
+        const delta = e.deltaY > 0 ? 0.9 : 1.1;
+        scale *= delta;
+        draw();
+    }, { passive: true });
+
+    // Перемещение холста
+    let isDragging = false;
+    canvas.addEventListener('mousedown', (e) => { if (e.button === 2 || e.button === 1) isDragging = true; });
+    window.addEventListener('mouseup', () => isDragging = false);
+    window.addEventListener('mousemove', (e) => {
+        if (isDragging) {
+            offsetX += e.movementX;
+            offsetY += e.movementY;
+            draw();
+        }
+    });
+
+    // Обновление полоски кулдауна
+    function updateUI() {
+        const fill = document.getElementById('cooldown-fill');
+        const text = document.getElementById('timer-text');
+        const percent = Math.min((currentCooldown / MAX_COOLDOWN) * 100, 100);
+        
+        fill.style.width = percent + '%';
+        text.innerText = `Заряд: ${currentCooldown} / 180 сек.`;
+
+        if (currentCooldown >= MAX_COOLDOWN) {
+            fill.classList.add('limit-reached');
+        } else {
+            fill.classList.remove('limit-reached');
+        }
+    }
+
+    // Локальный таймер для плавности
+    setInterval(() => {
+        if (currentCooldown > 0) {
+            currentCooldown -= 1;
+            updateUI();
+        }
+    }, 1000);
+
+    window.oncontextmenu = () => false;
+    window.addEventListener('resize', resize);
+    resize();
+</script>
+
+</body>
+</html>
